@@ -1,0 +1,510 @@
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+
+from .util import (
+    append_marked_block,
+    asset_text,
+    detect_github_project,
+    detect_gitlab_project,
+    detect_python_project,
+    dump_json,
+    git_origin,
+    parse_github_repo_from_url,
+    parse_gitlab_repo_from_url,
+    project_root,
+    write_text,
+)
+
+DEFAULT_POLICY = {
+    "version": 1,
+    "mcp_policy": {
+        "audit_log": ".repo-safety/logs/mcp-audit.jsonl",
+        "allow_write_tools": [],
+    },
+    "github_read_guard": {
+        "mode": "strict",
+        "allowed_repositories": [],
+        "allowed_resources": ["issues", "pulls", "branches", "commits"],
+        "resource_aliases": {"mrs": "pulls", "merge_requests": "pulls", "prs": "pulls"},
+        "require_explicit_reason": True,
+        "max_items": 30,
+        "max_body_chars": 20000,
+        "redact_secrets": True,
+        "block_prompt_injection_patterns": True,
+        "deny_cross_repo_reads": True,
+    },
+    "secret_files": [
+        ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ed25519",
+        "credentials*.json", "service-account*.json", "token.json", "tokens.json", "secrets.json",
+        ".mcp.json", "claude_desktop_config.json", "*.ovpn",
+    ],
+}
+
+DEFAULT_TRUFFLEHOG_EXCLUDES = (
+    r"(^|[\\/])(\.venv|venv|node_modules|\.opencode[\\/]node_modules|\.agents[\\/]node_modules)([\\/]|$)"
+    "\n"
+)
+
+
+def copy_asset(relative_asset: str, target: Path, *, overwrite: bool = False) -> bool:
+    return write_text(target, asset_text(relative_asset), overwrite=overwrite)
+
+
+def _write_policy(root: Path, *, overwrite: bool = False) -> list[str]:
+    actions: list[str] = []
+    policy_path = root / ".repo-safety" / "config.json"
+    policy = copy.deepcopy(DEFAULT_POLICY)
+    current_github_repo = parse_github_repo_from_url(git_origin(root))
+    if current_github_repo:
+        policy["github_read_guard"]["allowed_repositories"] = [current_github_repo]
+    current_gitlab_repo = parse_gitlab_repo_from_url(git_origin(root))
+    if current_gitlab_repo:
+        policy["gitlab_read_guard"] = {
+            "mode": "strict",
+            "gitlab_host": "gitlab.com",
+            "allowed_repositories": [current_gitlab_repo],
+            "allowed_resources": ["issues", "merge_requests", "branches", "commits"],
+            "resource_aliases": {"mrs": "merge_requests", "prs": "merge_requests"},
+            "require_explicit_reason": True,
+            "max_items": 30,
+            "max_body_chars": 20000,
+            "redact_secrets": True,
+            "block_prompt_injection_patterns": True,
+            "deny_cross_repo_reads": True,
+        }
+    if not policy_path.exists() or overwrite:
+        dump_json(policy_path, policy)
+        actions.append("created .repo-safety/config.json")
+    else:
+        actions.append("kept existing .repo-safety/config.json")
+    return actions
+
+
+def _install_namespaced_assets(root: Path, *, overwrite: bool = False) -> list[str]:
+    actions: list[str] = []
+    for asset, dest in [
+        ("docs/agent-hooks.md", ".repo-safety/docs/agent-hooks.md"),
+        ("docs/mcp-safety.md", ".repo-safety/docs/mcp-safety.md"),
+        ("docs/incident-cleanup.md", ".repo-safety/docs/incident-cleanup.md"),
+        ("docs/git-history-cleanup.md", ".repo-safety/docs/git-history-cleanup.md"),
+        ("docs/git-integrity.md", ".repo-safety/docs/git-integrity.md"),
+        ("docs/mitigation-map.md", ".repo-safety/docs/mitigation-map.md"),
+        ("docs/threat-model-template.md", ".repo-safety/docs/threat-model.md"),
+        ("docs/opencode.md", ".repo-safety/docs/opencode.md"),
+        ("scripts/forbid_sensitive_files.py", ".repo-safety/scripts/forbid_sensitive_files.py"),
+        ("scripts/prepush.py", ".repo-safety/scripts/prepush.py"),
+        ("scripts/fork_launcher.py", ".repo-safety/scripts/repo_safety.py"),
+        ("scripts/scan_mcp_config.py", ".repo-safety/scripts/scan_mcp_config.py"),
+        ("templates/universal/AGENTS.md", ".repo-safety/templates/AGENTS.md"),
+        ("templates/universal/AGENTS.append.md", ".repo-safety/templates/AGENTS.append.md"),
+        ("templates/universal/SECURITY.md", ".repo-safety/templates/SECURITY.md"),
+        ("templates/universal/dockerignore", ".repo-safety/templates/.dockerignore"),
+        ("templates/universal/env.example", ".repo-safety/templates/.env.example"),
+        ("templates/universal/gitignore.block", ".repo-safety/templates/.gitignore.block"),
+        ("templates/universal/pre-commit-config.yaml", ".repo-safety/templates/.pre-commit-config.yaml"),
+        ("templates/python/bandit.yaml", ".repo-safety/templates/bandit.yaml"),
+        ("templates/python/pyproject.ai-repo-safety.toml", ".repo-safety/templates/pyproject.ai-repo-safety.toml"),
+        ("templates/github/renovate.json", ".repo-safety/templates/github/renovate.json"),
+    ]:
+        if copy_asset(asset, root / dest, overwrite=overwrite):
+            actions.append(f"created {dest}")
+        else:
+            actions.append(f"kept existing {dest}")
+    return actions
+
+
+def apply_universal(root: Path, *, overwrite: bool = False, full: bool = False) -> list[str]:
+    actions: list[str] = []
+    actions.extend(_install_namespaced_assets(root, overwrite=overwrite))
+    if write_text(root / ".repo-safety" / "trufflehog-exclude.txt", DEFAULT_TRUFFLEHOG_EXCLUDES, overwrite=overwrite):
+        actions.append("created .repo-safety/trufflehog-exclude.txt")
+    else:
+        actions.append("kept existing .repo-safety/trufflehog-exclude.txt")
+    actions.extend(_write_policy(root, overwrite=overwrite))
+
+    if full:
+        block = asset_text("templates/universal/gitignore.block")
+        status = append_marked_block(root / ".gitignore", "AI REPO SAFETY", block)
+        actions.append(f".gitignore {status}")
+
+        if copy_asset("templates/universal/env.example", root / ".env.example", overwrite=overwrite):
+            actions.append("created .env.example")
+        else:
+            actions.append("kept existing .env.example")
+
+        if not (root / "AGENTS.md").exists() and copy_asset("templates/universal/AGENTS.md", root / "AGENTS.md", overwrite=overwrite):
+            actions.append("created AGENTS.md")
+        else:
+            status = append_marked_block(root / "AGENTS.md", "AI REPO SAFETY RULES", asset_text("templates/universal/AGENTS.append.md"))
+            actions.append(f"AGENTS.md {status}")
+
+        for asset, dest in [
+            ("templates/universal/SECURITY.md", "SECURITY.md"),
+            ("templates/universal/dockerignore", ".dockerignore"),
+            ("templates/universal/pre-commit-config.yaml", ".pre-commit-config.yaml"),
+            ("docs/agent-hooks.md", "docs/agent-hooks.md"),
+            ("docs/mcp-safety.md", "docs/mcp-safety.md"),
+            ("docs/incident-cleanup.md", "docs/incident-cleanup.md"),
+            ("docs/git-history-cleanup.md", "docs/git-history-cleanup.md"),
+            ("docs/git-integrity.md", "docs/git-integrity.md"),
+            ("docs/mitigation-map.md", "docs/mitigation-map.md"),
+            ("docs/threat-model-template.md", "docs/threat-model.md"),
+            ("docs/opencode.md", "docs/opencode.md"),
+            ("scripts/forbid_sensitive_files.py", "scripts/security/forbid_sensitive_files.py"),
+            ("scripts/prepush.py", "scripts/security/prepush.py"),
+            ("scripts/scan_mcp_config.py", "scripts/security/scan_mcp_config.py"),
+        ]:
+            path = root / dest
+            if path.exists() and not overwrite and dest == ".pre-commit-config.yaml":
+                alt = root / ".pre-commit-config.ai-repo-safety.yaml"
+                copy_asset(asset, alt, overwrite=True)
+                actions.append("existing .pre-commit-config.yaml found; wrote .pre-commit-config.ai-repo-safety.yaml")
+            elif copy_asset(asset, path, overwrite=overwrite):
+                actions.append(f"created {dest}")
+            else:
+                actions.append(f"kept existing {dest}")
+
+    return actions
+
+
+def apply_python(root: Path, *, overwrite: bool = False) -> list[str]:
+    actions: list[str] = []
+    for asset, dest in [
+        ("templates/python/bandit.yaml", "bandit.yaml"),
+        ("templates/python/pyproject.ai-repo-safety.toml", "pyproject.ai-repo-safety.toml"),
+        ("templates/python/settings.py", "src/app/settings.py"),
+        ("templates/python/test_security_basics.py", "tests/test_security_basics.py"),
+    ]:
+        if copy_asset(asset, root / dest, overwrite=overwrite):
+            actions.append(f"created {dest}")
+        else:
+            actions.append(f"kept existing {dest}")
+    return actions
+
+
+def apply_github(root: Path, *, overwrite: bool = False) -> list[str]:
+    actions: list[str] = []
+    workflow_assets = [
+        "security.yml",
+        "sast.yml",
+        "supply-chain.yml",
+        "scorecard.yml",
+        "codeql.optional.yml",
+    ]
+    for name in workflow_assets:
+        if copy_asset(f"workflows/{name}", root / ".github" / "workflows" / name, overwrite=overwrite):
+            actions.append(f"created .github/workflows/{name}")
+        else:
+            actions.append(f"kept existing .github/workflows/{name}")
+    for asset, dest in [
+        ("templates/github/renovate.json", "renovate.json"),
+        ("templates/github/pull_request_template.md", ".github/pull_request_template.md"),
+        ("templates/github/security_review_issue.md", ".github/ISSUE_TEMPLATE/security_review.md"),
+        ("templates/github/CODEOWNERS.example", ".github/CODEOWNERS.example"),
+    ]:
+        if copy_asset(asset, root / dest, overwrite=overwrite):
+            actions.append(f"created {dest}")
+        else:
+            actions.append(f"kept existing {dest}")
+    return actions
+
+
+def apply_gitlab(root: Path, *, overwrite: bool = False) -> list[str]:
+    actions: list[str] = []
+    for asset, dest in [
+        ("templates/gitlab/.gitlab-ci.yml", ".gitlab-ci.yml"),
+        ("templates/gitlab/merge_request_templates/default.md", ".gitlab/merge_request_templates/default.md"),
+        ("templates/gitlab/issue_templates/security.md", ".gitlab/issue_templates/security.md"),
+    ]:
+        if copy_asset(asset, root / dest, overwrite=overwrite):
+            actions.append(f"created {dest}")
+        else:
+            actions.append(f"kept existing {dest}")
+    return actions
+
+
+def apply_rules(root: Path, *, overwrite: bool = False) -> list[str]:
+    actions: list[str] = []
+    for name in [
+        "python-dangerous-code.yml",
+        "python-fastapi-security.yml",
+        "ai-agent-dangerous-patterns.yml",
+        "mcp-config-security.yml",
+        "github-actions-security.yml",
+        "secrets-adjacent.yml",
+    ]:
+        copy_asset(f"rules/opengrep/{name}", root / ".repo-safety" / "opengrep" / name, overwrite=True)
+        actions.append(f"installed .repo-safety/opengrep/{name}")
+    return actions
+
+
+def init_project(
+    target: str | Path,
+    *,
+    python: str = "auto",
+    github: str = "auto",
+    gitlab: str = "auto",
+    overwrite: bool = False,
+    full: bool = False,
+) -> int:
+    root = project_root(target)
+    root.mkdir(parents=True, exist_ok=True)
+    actions: list[str] = []
+    actions.extend(apply_universal(root, overwrite=overwrite, full=full))
+    actions.extend(apply_rules(root, overwrite=overwrite))
+
+    python_enabled = detect_python_project(root) if python == "auto" else python == "yes"
+    github_enabled = detect_github_project(root) if github == "auto" else github == "yes"
+    gitlab_enabled = detect_gitlab_project(root) if gitlab == "auto" else gitlab == "yes"
+
+    if python_enabled and full:
+        actions.extend(apply_python(root, overwrite=overwrite))
+    elif python_enabled:
+        actions.append("python profile detected; root files skipped (use --full to apply)")
+    else:
+        actions.append("python profile skipped")
+
+    if github_enabled and full:
+        actions.extend(apply_github(root, overwrite=overwrite))
+    elif github_enabled:
+        actions.append("github profile detected; root files skipped (use --full to apply)")
+    else:
+        actions.append("github profile skipped")
+
+    if gitlab_enabled and full:
+        actions.extend(apply_gitlab(root, overwrite=overwrite))
+    elif gitlab_enabled:
+        actions.append("gitlab profile detected; root files skipped (use --full to apply)")
+    else:
+        actions.append("gitlab profile skipped")
+
+    print("AI Repo Safety initialized:")
+    for action in actions:
+        print(f"- {action}")
+    print()
+    print("Next:")
+    print(f"  ai-repo-safety install-hooks --target {root}")
+    print(f"  ai-repo-safety install-agent-hooks --target {root} --tool all")
+    print(f"  ai-repo-safety scan --target {root}")
+    return 0
+
+
+def configure_github_repo_security(root: Path) -> bool:
+    from .util import git_origin, parse_github_repo_from_url, run_cmd, which
+    import json
+    import tempfile
+
+    if not which("gh"):
+        print("[github-security] GitHub CLI `gh` not found in PATH.")
+        return False
+
+    repo = parse_github_repo_from_url(git_origin(root))
+    if not repo:
+        print("[github-security] No GitHub remote repository origin found.")
+        return False
+
+    code, out, err = run_cmd(["gh", "auth", "status"])
+    if code != 0:
+        print("[github-security] GitHub CLI is not authenticated. Please run 'gh auth login'.")
+        return False
+
+    print(f"[github-security] Enabling GitHub Secret Scanning and Push Protection for {repo}...")
+
+    payload = {
+        "security_and_analysis": {
+            "secret_scanning": {"status": "enabled"},
+            "secret_scanning_push_protection": {"status": "enabled"}
+        }
+    }
+
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(payload, f)
+            temp_path = Path(f.name)
+
+        code, out, err = run_cmd(["gh", "api", "-X", "PATCH", f"repos/{repo}", "--input", str(temp_path)])
+        if code == 0:
+            print("[github-security] Successfully enabled Secret Scanning and Push Protection on GitHub.")
+            return True
+        else:
+            print("[github-security] Could not enable Secret Scanning and Push Protection.")
+            print("[github-security] Note: This requires admin access to the repository on GitHub.")
+            print("[github-security] Note: For private repositories, this requires GitHub Advanced Security (GHAS) licensing.")
+            if err or out:
+                print(f"[github-security] Error from GitHub API: {(err or out).strip()}")
+            return False
+    except Exception as e:
+        print(f"[github-security] Error configuring security: {e}")
+        return False
+    finally:
+        if temp_path is not None and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:  # nosec B110
+                pass
+
+
+def print_remediation_guidelines(findings: list[dict]) -> None:
+    has_github = False
+    has_aws = False
+    has_slack = False
+    has_private_key = False
+
+    for f in findings:
+        msg = f.get("message", "").lower()
+        file_path = f.get("file", "").lower()
+        if "github" in msg:
+            has_github = True
+        elif "aws" in msg:
+            has_aws = True
+        elif "slack" in msg:
+            has_slack = True
+        elif "private key" in msg or "key" in file_path or "pem" in file_path:
+            has_private_key = True
+
+    print("\n[Remediation actions required]:")
+    print("  1. Immediately revoke/rotate any compromised credentials:")
+    if has_github:
+        print("     - GitHub Token: Revoke immediately at https://github.com/settings/tokens")
+    if has_aws:
+        print("     - AWS Credentials: Deactivate immediately using AWS CLI:")
+        print("       aws iam deactivate-access-key --access-key-id <YOUR_ACCESS_KEY_ID>")
+        print("       Or via AWS Console: https://console.aws.amazon.com/iam/")
+    if has_slack:
+        print("     - Slack Token: Revoke and reinstall your app or token via Slack API dashboard.")
+    if has_private_key:
+        print("     - Private Key: Generate a new keypair and replace the public key on all authorized servers.")
+    if not (has_github or has_aws or has_slack or has_private_key):
+        print("     - Revoke the credentials at the issuing provider's dashboard.")
+
+    print("  2. To purge files/folders from git history, run:")
+    print("     git-filter-repo --path <path> --invert-paths")
+    print("  3. To document this incident, run:")
+    print("     ai-repo-safety incident")
+
+
+def setup_project(
+    target: str | Path,
+    *,
+    python: str = "auto",
+    github: str = "auto",
+    gitlab: str = "auto",
+    overwrite: bool = False,
+    full: bool = False,
+    mode: str = "plan",
+    install_tools: bool = False,
+    configure_github: bool = False,
+    run_hooks: bool = False,
+    yes: bool = False,
+) -> int:
+    """One-click setup for a target repository.
+
+    Safety posture: by default this command is plan-only. It does not
+    modify the host system, install global packages, push to remotes,
+    or call any GitHub API that mutates repository settings. Pass
+    ``yes=True`` together with the explicit ``install_tools`` /
+    ``configure_github`` / ``run_hooks`` flags to opt into the
+    corresponding side effects.
+
+    Modes:
+
+    - ``mode="plan"`` (default): run the fast scan and the local file
+      bootstrap, then print a plan of the remaining steps. Exit 0.
+    - ``mode="apply"``: run the same scan and bootstrap, then execute
+      whichever optional steps have been explicitly enabled by the
+      caller. The caller is responsible for passing ``yes=True`` so
+      the intent is unambiguous; this guards against scripted
+      invocations inheriting a YOLO posture by accident.
+    """
+    from .fast_scan import scan_directory
+
+    if mode not in {"plan", "apply"}:
+        raise ValueError(f"mode must be 'plan' or 'apply', got {mode!r}")
+
+    root = project_root(target)
+    print("=" * 60)
+    print("   AI REPO SAFETY - ONE-CLICK SETUP")
+    print(f"   mode: {mode}")
+    if mode == "apply":
+        print(f"   install_tools: {install_tools}")
+        print(f"   configure_github: {configure_github}")
+        print(f"   run_hooks: {run_hooks}")
+    print("=" * 60)
+
+    print("\n[Step 1/6] Running fast local scan...")
+    findings = scan_directory(root)
+    if findings:
+        print("\n[Warning] Potential security issues or forbidden files found by fast-scan:")
+        for f in findings:
+            line_info = f" (line {f['line']})" if "line" in f else ""
+            print(f"  - [{f['type']}] {f['file']}{line_info}: {f['message']}")
+        print_remediation_guidelines(findings)
+        print("-" * 50)
+    else:
+        print("[OK] Fast local scan passed. No immediate issues found.")
+
+    if mode == "plan":
+        # Read-only plan. We do not call init_project here; that
+        # would mutate the target. The user is expected to run
+        # `ai-repo-safety init --target .` separately, then
+        # `setup --apply --yes` for the rest.
+        print(
+            "\n[Step 2/6] Would initialize repository safety assets: "
+            "SKIPPED (plan mode; run `ai-repo-safety init --target .` to apply minimal assets, "
+            "or add `--full` for the full bootstrap)"
+        )
+        print("\n[Step 3/6] Would install missing tools: SKIPPED (plan mode)")
+        print("\n[Step 4/6] Would install git hooks: SKIPPED (plan mode)")
+        print("\n[Step 5/6] Would run full security scans: SKIPPED (plan mode)")
+        print("\n[Step 6/6] Would configure GitHub repository security: SKIPPED (plan mode)")
+        print(
+            "\nPlan complete. Re-run with --apply --yes to perform the optional steps. "
+            "Use --install-tools, --configure-github, --run-hooks to opt in individually."
+        )
+        return 0
+
+    print("\n[Step 2/6] Initializing repository safety assets...")
+    init_project(root, python=python, github=github, gitlab=gitlab, overwrite=overwrite, full=full)
+
+    if not yes:
+        print(
+            "\n[Refusing to mutate] apply mode requires explicit --yes. "
+            "Re-run with --yes to perform the optional steps."
+        )
+        return 2
+
+    from .hooks import install_hooks
+    from .scanner import scan
+
+    if install_tools:
+        print("\n[Step 3/6] Installing missing tools...")
+        from .tools import install_missing_tools
+        install_missing_tools()
+    else:
+        print("\n[Step 3/6] Skipped (not requested). Use --install-tools to opt in.")
+
+    if run_hooks:
+        print("\n[Step 4/6] Installing git hooks...")
+        install_hooks(root)
+    else:
+        print("\n[Step 4/6] Skipped (not requested). Use --run-hooks to opt in.")
+
+    print("\n[Step 5/6] Running full security scans...")
+    scan_result = scan(root, offline=True)
+
+    if configure_github:
+        print("\n[Step 6/6] Configuring GitHub repository security...")
+        configure_github_repo_security(root)
+    else:
+        print("\n[Step 6/6] Skipped (not requested). Use --configure-github to opt in.")
+
+    print("\n" + "=" * 60)
+    if scan_result == 0:
+        print("[OK] Setup apply complete. Repository is now secured.")
+    else:
+        print("[Warning] Setup apply complete with warnings. Please address the scan findings above.")
+    print("=" * 60)
+    return scan_result

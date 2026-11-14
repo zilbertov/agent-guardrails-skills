@@ -1,0 +1,400 @@
+from __future__ import annotations
+
+import argparse
+
+from . import __version__
+from .agent_hooks import install_agent_hooks
+from .bootstrap import init_project, setup_project
+from .github_guard import check_text, read_github, validate_request
+from .gitlab_guard import check_text as gl_check_text, read_gitlab, validate_request as gl_validate_request
+from .git_integrity import audit_git_integrity
+from .hooks import install_hooks
+from .incident import create as create_incident
+from .scanner import prepush, scan
+from .threat_model import generate as generate_threat_model
+from .tools import doctor
+from .util import project_root
+from .verify_release import verify_release
+
+
+def _common() -> argparse.ArgumentParser:
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument("--target", default=".", help="repository root")
+    parent.add_argument("--json", action="store_true", help="emit JSON on stdout")
+    return parent
+
+
+def build_parser() -> argparse.ArgumentParser:
+    common = _common()
+    parser = argparse.ArgumentParser(prog="ai-repo-safety", description="AI/vibe-coding repo safety skill CLI")
+    parser.add_argument("--version", action="version", version=f"ai-repo-safety {__version__}")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("doctor", help="check Git/Python/uv/uvx/scanners and print agent install plan", parents=[common])
+    p.add_argument("--agent-plan", action="store_true", help="always print agent install plan")
+
+    for name, help_text in (
+        ("install-tools", "install missing Python and system tools"),
+        ("install-missing", "[deprecated alias for install-tools] Install missing Python and system tools"),
+    ):
+        p = sub.add_parser(name, help=help_text, parents=[common])
+        p.add_argument("--dry-run", action="store_true")
+        p.add_argument(
+            "--yes",
+            action="store_true",
+            help="required confirmation flag for any actual install",
+        )
+
+    p = sub.add_parser("setup", help="plan and optionally apply repo safety bootstrap (plan-only by default)", parents=[common])
+    p.add_argument("--python", choices=["auto", "yes", "no"], default="auto")
+    p.add_argument("--github", choices=["auto", "yes", "no"], default="auto")
+    p.add_argument("--gitlab", choices=["auto", "yes", "no"], default="auto")
+    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--full", action="store_true", help="apply full root-level integrations instead of the minimal namespaced footprint")
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="actually perform the optional steps; default is plan-only",
+    )
+    p.add_argument(
+        "--install-tools",
+        action="store_true",
+        help="in --apply mode, run the system/Python tool installer",
+    )
+    p.add_argument(
+        "--run-hooks",
+        action="store_true",
+        help="in --apply mode, install the local git pre-push hook",
+    )
+    p.add_argument(
+        "--configure-github",
+        action="store_true",
+        help="in --apply mode, call the GitHub API to enable secret scanning and push protection",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="required confirmation flag for any --apply mutation",
+    )
+
+    p = sub.add_parser("init", help="apply repo safety assets", parents=[common])
+    p.add_argument("--python", choices=["auto", "yes", "no"], default="auto")
+    p.add_argument("--github", choices=["auto", "yes", "no"], default="auto")
+    p.add_argument("--gitlab", choices=["auto", "yes", "no"], default="auto")
+    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--full", action="store_true", help="apply full root-level integrations instead of the minimal namespaced footprint")
+
+    p = sub.add_parser("install-hooks", help="install Git pre-commit and pre-push hooks (refuses to overwrite existing unmanaged hooks)", parents=[common])
+    p.add_argument(
+        "--chain",
+        action="store_true",
+        help="keep any existing hook and append a managed block after it",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace any existing hook with the managed one",
+    )
+    p.add_argument(
+        "--hooks-path",
+        default=None,
+        help="custom hooks directory (defaults to .git/hooks)",
+    )
+
+    p = sub.add_parser(
+        "install-agent-hooks",
+        help="install project-local hooks for Grok, Codex, Claude Code, OpenCode, and Antigravity",
+        parents=[common],
+    )
+    p.add_argument(
+        "--tool",
+        choices=["all", "grok", "codex", "claude", "opencode", "antigravity"],
+        default="all",
+        help="which runtime to generate config for",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace any existing generated agent hook config",
+    )
+    p.add_argument(
+        "--global",
+        dest="global_hooks",
+        action="store_true",
+        help="also install Grok hooks into ~/.grok/hooks/ (opt-in; skipped by default)",
+    )
+
+    p = sub.add_parser("gate", help="fail-closed commit/push/tag/github-read gate", parents=[common])
+    p.add_argument(
+        "--when",
+        required=True,
+        choices=["commit", "push", "tag", "github-read", "auto"],
+        help="auto reads git pre-push stdin (tag refs select the tag gate)",
+    )
+    p.add_argument("--offline", action="store_true")
+    p.add_argument("--repo", help="github-read: owner/repo")
+    p.add_argument(
+        "--resource",
+        choices=["issues", "pulls", "prs", "branches", "commits", "mrs", "merge_requests"],
+    )
+    p.add_argument("--reason")
+    p.add_argument("--limit", type=int)
+    p.add_argument("--allow-prompt-injection-risk", action="store_true")
+    p.add_argument("--version", dest="gate_version", help="tag gate: version for verify-release")
+
+    p = sub.add_parser("scan", help="run available local scans", parents=[common])
+    p.add_argument("--strict", action="store_true", help="missing recommended scanners fail the run")
+    p.add_argument("--verify-secrets", action="store_true", help="explicit opt-in: validate candidate credentials against provider APIs; incompatible with --offline")
+    p.add_argument(
+        "--offline",
+        action="store_true",
+        help="skip network-required tools (e.g. lockfile audit) instead of failing",
+    )
+    p.add_argument(
+        "--sarif",
+        action="store_true",
+        help="emit the scan result as SARIF 2.1.0 on stdout",
+    )
+    p.add_argument(
+        "--agent-skills",
+        action="store_true",
+        help="include optional AI agent skill scanners when available",
+    )
+    p.add_argument(
+        "--allow-cloud-agent-scan",
+        action="store_true",
+        help="allow cloud-backed agent metadata scanning tools such as snyk-agent-scan",
+    )
+
+    p = sub.add_parser("prepush", help="alias for gate --when push", parents=[common])
+    p.add_argument("--offline", action="store_true")
+
+    p = sub.add_parser("threat-model", help="create lightweight STRIDE threat model template", parents=[common])
+    p.add_argument("--overwrite", action="store_true")
+
+    p = sub.add_parser("incident", help="create incident cleanup doc", parents=[common])
+    p.add_argument("--type", default="secret-leak")
+    p.add_argument("--overwrite", action="store_true")
+
+    p = sub.add_parser("git-integrity", help="audit local git history integrity signals and attribution hints", parents=[common])
+
+    p = sub.add_parser("verify-release", help="verify the project is ready for a new release", parents=[common])
+    p.add_argument("--version", required=True, help="expected release version, e.g. 0.1.5")
+    p.add_argument("--skip-build", action="store_true", help="do not run uv build")
+
+    p = sub.add_parser("sbom", help="generate a CycloneDX SBOM (requires cyclonedx-bom)", parents=[common])
+    p.add_argument(
+        "--format",
+        choices=["cyclonedx-json", "cyclonedx-xml"],
+        default="cyclonedx-json",
+    )
+    p.add_argument("--output", default="sbom.cdx.json", help="output file path")
+    p.add_argument(
+        "--scope",
+        choices=["environment", "requirements", "pipenv", "poetry"],
+        default="environment",
+        help=(
+            "what to inventory. Matches `cyclonedx-bom` v7.3.0 "
+            "subcommands. The earlier `project` scope was removed "
+            "because it pointed at a non-existent subcommand."
+        ),
+    )
+
+    gh = sub.add_parser("github-guard", help="guard reads of GitHub commits/PRs/branches/issues")
+    gh_sub = gh.add_subparsers(dest="gh_cmd", required=True)
+
+    p = gh_sub.add_parser("validate", help="validate if a GitHub read is allowed by policy", parents=[common])
+    p.add_argument("--repo", required=True)
+    p.add_argument("--resource", required=True, choices=["issues", "pulls", "prs", "branches", "commits", "mrs", "merge_requests"])
+    p.add_argument("--reason")
+    p.add_argument("--limit", type=int)
+
+    p = gh_sub.add_parser("read", help="read GitHub data through policy and redaction guard", parents=[common])
+    p.add_argument("--repo", required=True)
+    p.add_argument("--resource", required=True, choices=["issues", "pulls", "prs", "branches", "commits", "mrs", "merge_requests"])
+    p.add_argument("--reason")
+    p.add_argument("--limit", type=int)
+    p.add_argument("--allow-prompt-injection-risk", action="store_true")
+
+    p = gh_sub.add_parser("check-text", help="scan text/file for prompt-injection-like patterns and redact secrets", parents=[common])
+    p.add_argument("--file")
+    p.add_argument("--text")
+
+    gl = sub.add_parser("gitlab-guard", help="guard reads of GitLab commits/MRs/branches/issues")
+    gl_sub = gl.add_subparsers(dest="gl_cmd", required=True)
+
+    p = gl_sub.add_parser("validate", help="validate if a GitLab read is allowed by policy", parents=[common])
+    p.add_argument("--repo", required=True)
+    p.add_argument("--resource", required=True, choices=["issues", "merge_requests", "mrs", "branches", "commits"])
+    p.add_argument("--reason")
+    p.add_argument("--limit", type=int)
+
+    p = gl_sub.add_parser("read", help="read GitLab data through policy and redaction guard", parents=[common])
+    p.add_argument("--repo", required=True)
+    p.add_argument("--resource", required=True, choices=["issues", "merge_requests", "mrs", "branches", "commits"])
+    p.add_argument("--reason")
+    p.add_argument("--limit", type=int)
+    p.add_argument("--allow-prompt-injection-risk", action="store_true")
+
+    p = gl_sub.add_parser("check-text", help="scan text/file for prompt-injection-like patterns and redact secrets", parents=[common])
+    p.add_argument("--file")
+    p.add_argument("--text")
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    import sys
+
+    # Normalize the CLI's PATH so subprocesses can find venv-installed
+    # tools, opengrep, and the user's local bin. This is an explicit,
+    # idempotent side effect of running the CLI; importing the package
+    # must not have triggered it.
+    from .util import prepare_cli_environment
+
+    prepare_cli_environment()
+
+    if sys.stdout.encoding.lower() != 'utf-8':
+        try:
+            # Python 3.7+ on TextIOWrapper exposes reconfigure; on
+            # older streams or in stub type-checker environments
+            # the attribute is missing. We attempt and ignore.
+            sys.stdout.reconfigure(encoding='utf-8')  # type: ignore[attr-defined]
+            sys.stderr.reconfigure(encoding='utf-8')  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.cmd == "doctor":
+        return doctor(agent_plan=args.agent_plan, json_out=args.json, target=args.target)
+    elif args.cmd in ("install-missing", "install-tools"):
+        from ai_repo_safety.tools import install_missing_tools
+        return install_missing_tools(dry_run=args.dry_run, yes=args.yes)
+    if args.cmd == "setup":
+        return setup_project(
+            args.target,
+            python=args.python,
+            github=args.github,
+            gitlab=args.gitlab,
+            overwrite=args.overwrite,
+            full=args.full,
+            mode="apply" if args.apply else "plan",
+            install_tools=args.install_tools,
+            configure_github=args.configure_github,
+            run_hooks=args.run_hooks,
+            yes=args.yes,
+        )
+    if args.cmd == "init":
+        return init_project(
+            args.target,
+            python=args.python,
+            github=args.github,
+            gitlab=args.gitlab,
+            overwrite=args.overwrite,
+            full=args.full,
+        )
+    if args.cmd == "install-hooks":
+        return install_hooks(
+            args.target,
+            overwrite=args.overwrite,
+            chain=args.chain,
+            hooks_path=args.hooks_path,
+        )
+    if args.cmd == "install-agent-hooks":
+        return install_agent_hooks(
+            args.target,
+            tool=args.tool,
+            overwrite=args.overwrite,
+            global_hooks=args.global_hooks,
+        )
+    if args.cmd == "gate":
+        from .gate import run_gate
+
+        return run_gate(
+            args.target,
+            when=args.when,
+            json_out=args.json,
+            offline=args.offline,
+            repo=args.repo,
+            resource=args.resource,
+            reason=args.reason,
+            limit=args.limit,
+            allow_prompt_injection_risk=args.allow_prompt_injection_risk,
+            version=args.gate_version,
+        )
+    if args.cmd == "scan":
+        if args.offline and (args.verify_secrets or args.allow_cloud_agent_scan):
+            parser.error("--offline forbids --verify-secrets and --allow-cloud-agent-scan")
+        if args.json or args.sarif:
+            from .scan_output import emit_scan
+
+            return emit_scan(
+                args.target,
+                strict=args.strict,
+                offline=args.offline,
+                sarif=args.sarif,
+                agent_skills=args.agent_skills,
+                allow_cloud_agent_scan=args.allow_cloud_agent_scan,
+                verify_secrets=args.verify_secrets,
+            )
+        return scan(
+            args.target,
+            strict=args.strict,
+            offline=args.offline,
+            agent_skills=args.agent_skills,
+            allow_cloud_agent_scan=args.allow_cloud_agent_scan,
+            verify_secrets=args.verify_secrets,
+        )
+    if args.cmd == "prepush":
+        return prepush(args.target, offline=args.offline, json_out=args.json)
+    if args.cmd == "threat-model":
+        return generate_threat_model(args.target, overwrite=args.overwrite)
+    if args.cmd == "incident":
+        return create_incident(args.target, incident_type=args.type, overwrite=args.overwrite)
+    if args.cmd == "git-integrity":
+        return audit_git_integrity(args.target)
+    if args.cmd == "verify-release":
+        return verify_release(
+            args.target,
+            args.version,
+            skip_build=args.skip_build,
+        )
+    if args.cmd == "sbom":
+        from .sbom import generate_sbom
+
+        return generate_sbom(
+            target=args.target,
+            output=args.output,
+            fmt=args.format,
+            scope=args.scope,
+        )
+    if args.cmd == "github-guard":
+        root = project_root(args.target)
+        if args.gh_cmd == "validate":
+            ok, msg, limit, resource = validate_request(root, args.repo, args.resource, args.reason, args.limit)
+            print({"allowed": ok, "message": msg, "resource": resource, "effective_limit": limit})
+            return 0 if ok else 2
+        if args.gh_cmd == "read":
+            return read_github(root, args.repo, args.resource, args.reason, args.limit, args.allow_prompt_injection_risk)
+        if args.gh_cmd == "check-text":
+            return check_text(root, args.file, args.text)
+
+    if args.cmd == "gitlab-guard":
+        root = project_root(args.target)
+        if args.gl_cmd == "validate":
+            ok, msg, limit, resource = gl_validate_request(root, args.repo, args.resource, args.reason, args.limit)
+            print({"allowed": ok, "message": msg, "resource": resource, "effective_limit": limit})
+            return 0 if ok else 2
+        if args.gl_cmd == "read":
+            return read_gitlab(root, args.repo, args.resource, args.reason, args.limit, args.allow_prompt_injection_risk)
+        if args.gl_cmd == "check-text":
+            return gl_check_text(root, args.file, args.text)
+
+    parser.error("unknown command")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

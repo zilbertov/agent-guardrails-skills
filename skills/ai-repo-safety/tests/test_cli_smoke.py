@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+from ai_repo_safety.cli import main
+
+
+def test_doctor_runs() -> None:
+    code = main(["doctor"])
+    assert code in (0, 2)
+
+
+def test_doctor_accepts_target_and_json(tmp_path: Path) -> None:
+    code = main(["doctor", "--target", str(tmp_path), "--json"])
+    assert code in (0, 2)
+
+
+def test_init_project(tmp_path: Path) -> None:
+    code = main(["init", "--target", str(tmp_path), "--python", "yes", "--github", "no"])
+    assert code == 0
+    assert (tmp_path / ".repo-safety" / "config.json").exists()
+    assert (tmp_path / ".repo-safety" / "trufflehog-exclude.txt").exists()
+    assert (tmp_path / ".repo-safety" / "scripts" / "forbid_sensitive_files.py").exists()
+    assert (tmp_path / ".repo-safety" / "docs" / "agent-hooks.md").exists()
+    assert (tmp_path / ".repo-safety" / "templates" / "AGENTS.md").exists()
+    assert (tmp_path / ".repo-safety" / "templates" / "SECURITY.md").exists()
+    assert (tmp_path / ".repo-safety" / "templates" / ".env.example").exists()
+    assert not (tmp_path / "scripts" / "security" / "forbid_sensitive_files.py").exists()
+    assert not (tmp_path / ".gitignore").exists()
+    assert not (tmp_path / ".dockerignore").exists()
+    assert not (tmp_path / ".env.example").exists()
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert not (tmp_path / "SECURITY.md").exists()
+    assert not (tmp_path / "bandit.yaml").exists()
+    assert not (tmp_path / "pyproject.ai-repo-safety.toml").exists()
+
+
+def test_init_project_appends_existing_agents_md(tmp_path: Path) -> None:
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# Project Rules\n\nKeep this.\n", encoding="utf-8")
+    code = main(["init", "--target", str(tmp_path), "--python", "no", "--github", "no", "--full"])
+    assert code == 0
+    text = agents.read_text(encoding="utf-8")
+    assert text.startswith("# Project Rules\n\nKeep this.")
+    assert text.count("AI REPO SAFETY RULES") == 2
+    code = main(["init", "--target", str(tmp_path), "--python", "no", "--github", "no"])
+    assert code == 0
+    assert agents.read_text(encoding="utf-8").count("AI REPO SAFETY RULES") == 2
+
+
+def test_init_project_full_writes_root_integrations(tmp_path: Path) -> None:
+    code = main(["init", "--target", str(tmp_path), "--python", "yes", "--github", "no", "--full"])
+    assert code == 0
+    assert (tmp_path / "scripts" / "security" / "forbid_sensitive_files.py").exists()
+    assert (tmp_path / "docs" / "agent-hooks.md").exists()
+    assert (tmp_path / "bandit.yaml").exists()
+    assert (tmp_path / "pyproject.ai-repo-safety.toml").exists()
+
+
+def test_init_project_gitlab_profile(tmp_path: Path) -> None:
+    code = main(["init", "--target", str(tmp_path), "--python", "no", "--github", "no", "--gitlab", "yes"])
+    assert code == 0
+    assert not (tmp_path / ".gitlab-ci.yml").exists()
+    assert not (tmp_path / ".gitlab" / "merge_request_templates" / "default.md").exists()
+
+
+def test_init_project_full_writes_gitlab_profile(tmp_path: Path) -> None:
+    code = main(["init", "--target", str(tmp_path), "--python", "no", "--github", "no", "--gitlab", "yes", "--full"])
+    assert code == 0
+    assert (tmp_path / ".gitlab-ci.yml").exists()
+    assert (tmp_path / ".gitlab" / "merge_request_templates" / "default.md").exists()
+
+
+def test_install_agent_hooks_writes_runtime_configs(tmp_path: Path) -> None:
+    code = main(["install-agent-hooks", "--target", str(tmp_path), "--tool", "all"])
+    assert code == 0
+    assert (tmp_path / ".repo-safety" / "scripts" / "agent_hook_runner.py").exists()
+    codex_hooks = tmp_path / ".codex" / "hooks.json"
+    assert codex_hooks.exists()
+    codex_data = json.loads(codex_hooks.read_text(encoding="utf-8"))
+    assert codex_data["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
+    assert ".repo-safety/scripts/agent_hook_runner.py" in codex_data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "--profile sensitive-preflight" in codex_data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "commandWindows" in codex_data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert codex_data["hooks"]["PreToolUse"][1]["matcher"] == "^mcp__github__.*$"
+    assert "--profile mcp-invocation-audit" in codex_data["hooks"]["PreToolUse"][1]["hooks"][0]["command"]
+    assert codex_data["hooks"]["PreToolUse"][2]["matcher"] == "^mcp__gitlab__.*$"
+
+    claude_settings = tmp_path / ".claude" / "settings.json"
+    assert claude_settings.exists()
+    claude_data = json.loads(claude_settings.read_text(encoding="utf-8"))
+    claude_args = claude_data["hooks"]["PreToolUse"][0]["hooks"][0]["args"]
+    assert ".repo-safety/scripts/agent_hook_runner.py" in claude_args[0]
+    assert claude_args[-2:] == ["--profile", "sensitive-preflight"]
+    claude_mcp = claude_data["hooks"]["PreToolUse"][1]
+    assert claude_mcp["matcher"] == "^mcp__github__.*$"
+    assert claude_mcp["hooks"][0]["args"][-2:] == ["--profile", "mcp-invocation-audit"]
+    assert claude_data["hooks"]["PreToolUse"][2]["matcher"] == "^mcp__gitlab__.*$"
+
+    opencode_plugin = tmp_path / ".opencode" / "plugins" / "ai-repo-safety.js"
+    assert opencode_plugin.exists()
+    opencode_text = opencode_plugin.read_text(encoding="utf-8")
+    assert '"tool.execute.before"' in opencode_text
+    assert "--profile sensitive-preflight" in opencode_text
+
+    antigravity_hooks = tmp_path / ".agents" / "hooks.json"
+    assert antigravity_hooks.exists()
+    antigravity_data = json.loads(antigravity_hooks.read_text(encoding="utf-8"))
+    assert antigravity_data["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
+    assert "commandWindows" in antigravity_data["hooks"]["PreToolUse"][0]["hooks"][0]
+
+    grok_hooks = tmp_path / ".grok" / "hooks" / "ai-repo-safety.json"
+    assert grok_hooks.exists()
+    grok_data = json.loads(grok_hooks.read_text(encoding="utf-8"))
+    assert grok_data["hooks"]["PreToolUse"][0]["matcher"] == "Bash|run_terminal_command"
+    assert grok_data["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] == 600
+    assert "--profile gate" in grok_data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert grok_data["hooks"]["PreToolUse"][1]["matcher"] == "^(mcp__)?(github|gitlab)__.*$"
+
+
+def test_install_agent_hooks_for_single_runtime_scopes_output(tmp_path: Path) -> None:
+    code = main(["install-agent-hooks", "--target", str(tmp_path), "--tool", "opencode"])
+    assert code == 0
+    assert (tmp_path / ".opencode" / "plugins" / "ai-repo-safety.js").exists()
+    assert not (tmp_path / ".codex" / "hooks.json").exists()
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    assert not (tmp_path / ".agents" / "hooks.json").exists()
+
+
+def test_setup_plan_does_not_mutate(tmp_path: Path) -> None:
+    """Plan-only setup is strictly read-only: it must not create
+    files, install hooks, or call any GitHub API. CI must be able
+    to run this test on a machine with no network, no gh auth, and
+    missing optional scanners."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True)
+    code = main(["setup", "--target", str(tmp_path), "--python", "yes", "--github", "no"])
+    assert code == 0, "plan-only setup must always succeed on a clean checkout"
+    # Read-only contract: no files were created.
+    assert not (tmp_path / ".gitignore").exists(), (
+        "plan-only setup must not write .gitignore; that is init's job"
+    )
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert not (tmp_path / ".env.example").exists()
+    assert not (tmp_path / ".repo-safety" / "scripts" / "forbid_sensitive_files.py").exists()
+    assert not (tmp_path / ".git" / "hooks" / "pre-push").exists(), (
+        "plan-only setup must not install git hooks"
+    )
+
+
+def test_setup_apply_refuses_without_yes(tmp_path: Path) -> None:
+    """Apply mode is gated on --yes so scripted invocations cannot
+    silently inherit a YOLO posture."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True)
+    code = main([
+        "setup",
+        "--target", str(tmp_path),
+        "--python", "yes",
+        "--github", "no",
+        "--apply",
+        "--install-tools",
+    ])
+    assert code == 2, "apply mode without --yes must refuse with exit 2"
+
+
+def test_setup_apply_with_yes_writes_assets(tmp_path: Path) -> None:
+    """Apply mode with --yes and --run-hooks actually mutates: it
+    runs init and installs the pre-push hook."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True)
+    code = main([
+        "setup",
+        "--target", str(tmp_path),
+        "--python", "yes",
+        "--github", "no",
+        "--apply",
+        "--run-hooks",
+        "--yes",
+    ])
+    assert code == 0
+    assert (tmp_path / ".repo-safety" / "scripts" / "forbid_sensitive_files.py").exists()
+    assert (tmp_path / ".git" / "hooks" / "pre-push").exists()
+    assert not (tmp_path / ".gitignore").exists()
+    assert not (tmp_path / "AGENTS.md").exists()
