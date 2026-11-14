@@ -237,7 +237,7 @@ def _run_build_artifact_check(root: Path) -> str | None:
     code, _, _ = subprocess_command(["uv", "build"], cwd=root)
     if code != 0:
         return "uv build failed"
-    code, _, _ = subprocess_command(["uvx", "twine", "check", "dist/*"], cwd=root)
+    code, _, _ = subprocess_command(["twine", "check", "dist/*"], cwd=root)
     if code != 0:
         return "twine check failed"
     code, _, _ = subprocess_command([sys.executable, "scripts/check-package-artifacts.py"], cwd=root)

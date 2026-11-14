@@ -140,8 +140,8 @@ def _checks(expected_version: str) -> list[Check]:
     return [
         Check("ci / test py3.12", ["uv", "run", "--extra", "dev", "--python", "3.12", "pytest", "-q"]),
         Check("ci / test py3.13", ["uv", "run", "--extra", "dev", "--python", "3.13", "pytest", "-q"]),
-        Check("ci+sast / ruff", ["uvx", "--from", "ruff==0.15.17", "ruff", "check", "."]),
-        Check("sast / bandit", ["uvx", "bandit", "-q", "-r", "src", "-x", "tests,.venv,venv"]),
+        Check("ci+sast / ruff", ["ruff", "check", "."]),
+        Check("sast / bandit", ["bandit", "-q", "-r", "src", "-x", "tests,.venv,venv"]),
         Check("sast / lockfile-audit", [sys.executable, "-m", "ai_repo_safety.lockfile_audit", str(ROOT)]),
         Check("sast / opengrep placeholder local equivalent"),
         Check("ci / uv build", ["uv", "build"]),
@@ -185,7 +185,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if check.name == "sast / opengrep placeholder local equivalent":
             code = _opengrep_check()
         elif check.name == "ci+publish-pypi / twine check":
-            code = _run(["uvx", "twine", "check", *_dist_paths()])
+            code = _run(["twine", "check", *_dist_paths()])
         elif check.name == "ci / npm wrapper pin":
             print("\n[local-github-checks] npm wrapper pin", flush=True)
             code = _assert_npm_wrapper_pins_version()

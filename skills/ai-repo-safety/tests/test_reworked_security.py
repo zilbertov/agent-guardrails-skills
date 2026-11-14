@@ -116,3 +116,19 @@ def test_new_repo_fast_scan_and_no_target_helper_execution(tmp_path,capsys):
         assert scan_output.emit_scan(tmp_path,offline=True)==1
     assert not sentinel.exists()
     assert 'synthetic_canary' not in capsys.readouterr().out
+
+
+def test_legacy_install_yes_only_reports_no_download(capsys):
+    from ai_repo_safety import tools
+    with patch.object(tools,'which',return_value=None),patch.object(tools,'run_cmd',side_effect=AssertionError('must not download')):
+        assert tools.install_missing_tools(yes=True)==2
+    assert 'no downloads' in capsys.readouterr().out
+
+
+def test_doctor_invokes_local_bundle_not_upstream(tmp_path,capsys):
+    from ai_repo_safety import tools
+    with patch.object(tools,'which',return_value=None):
+        tools.doctor(target=tmp_path,json_out=True)
+    payload=json.loads(capsys.readouterr().out)
+    assert payload['invoke'][0][1].endswith('scripts/repo_safety.py')
+    assert not any('uvx' in str(c) for c in payload['invoke'])

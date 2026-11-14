@@ -18,7 +18,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -q
 ruff check .
 ai-repo-safety git-integrity --target .
 rm -rf dist && uv build --no-sources
-uvx twine check dist/*
+twine check dist/*
 python scripts/check-package-artifacts.py
 bash scripts/smoke-wheel.sh
 python scripts/local-github-checks.py --version X.Y.Z

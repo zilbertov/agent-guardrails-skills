@@ -11,14 +11,7 @@ Two security skills for coding agents: a focused repository-safety fork and an o
 
 Copy the **complete selected skill directory** into your agent's supported project/user skill directory. Keep `src`, `scripts`, `assets`, and references together. Nothing installs on clone or import. Avoid keeping upstream and this fork enabled under the same skill name.
 
-For clients using Vercel's Skills CLI, these are discoverable as separate skills:
-
-```sh
-npx skills add zilbertov/agent-guardrails-skills --skill ai-repo-safety
-npx skills add zilbertov/agent-guardrails-skills --skill repo-intake-guard
-```
-
-These commands execute an external installer; manual copy avoids that dependency. For repeatable installs use a reviewed commit URL instead of a moving branch. Python 3.12+ is needed for the bundled safety commands.
+Use a locally copied, reviewed full Git commit. Do not fetch `main`, `latest`, an unversioned installer or an upstream PyPI package on each invocation. Review updates separately; a checksum proves fixed bytes, not that those bytes are benign. Python 3.12+ is needed for bundled safety commands.
 
 ## Repo Intake Guard
 
@@ -47,7 +40,7 @@ This source bundle does not publish or invoke the upstream npm/PyPI package. The
 
 ## Workflow Herdr moved
 
-Workflow Herdr now lives in its own public repository: [zilbertov/workflow-herdr](https://github.com/zilbertov/workflow-herdr). Install it separately with `npx skills add zilbertov/workflow-herdr --skill workflow-herdr`. It is no longer bundled here.
+Workflow Herdr now lives in its own public repository: [zilbertov/workflow-herdr](https://github.com/zilbertov/workflow-herdr). Install a reviewed full commit from that repository separately. It is no longer bundled here.
 
 ## Changes and verification
 
@@ -67,3 +60,9 @@ For Windows set `PYTHONPATH` using your shell's environment syntax. No test requ
 AI Repo Safety is derived from Artem Letyushev's MIT-licensed [ai-repo-safety-skill](https://github.com/letya999/ai-repo-safety-skill) at `5530bd29a9a89acfb88b9b9b7703d972a33917e4`. Its original LICENSE is preserved. This is an independent modified distribution, not an upstream release. No production credentials, private project context or user configuration is included.
 
 Repo Intake Guard is an original MIT-licensed skill by zilbertov, informed by the [ASSET GhostCommit disclosure](https://asset-group.github.io/disclosures/ghostcommit/). It does not include the attack payload or the user’s video.
+
+## Tool supply-chain boundary
+
+Routine scan never invokes uvx or installs a missing pip-audit. Missing tools are reported; strict mode is nonzero when coverage is missing. Dependency auditing retains `--disable-pip` and does not retry by resolving/building target dependencies. `install-missing` is now a prerequisite plan only, including legacy `--yes`.
+
+For Python tools, install an owner-reviewed transitive hash lock into a dedicated tool environment, using installed pip with `--require-hashes --only-binary=:all:`. Native tools need reviewed release artifacts with verified hashes/signatures. CI templates require that tool lock; GitLab requires an owner-reviewed digest-pinned image and a vendored copy of this fork. External advisory databases may still be contacted by online audits; offline mode skips them. This is different from downloading new executable code.

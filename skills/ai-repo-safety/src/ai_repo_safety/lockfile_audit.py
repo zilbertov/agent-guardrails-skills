@@ -18,8 +18,6 @@ from pathlib import Path
 
 from .util import project_root, run_cmd, which
 
-PIP_AUDIT_UVX = ["uvx", "--with", "msgpack>=1.2.1", "pip-audit"]
-
 
 def _is_python_repo(root: Path) -> bool:
     return (root / "pyproject.toml").exists() or (root / "requirements.txt").exists()
@@ -28,8 +26,6 @@ def _is_python_repo(root: Path) -> bool:
 def _pip_audit_cmd() -> list[str] | None:
     if which("pip-audit"):
         return ["pip-audit"]
-    if which("uvx"):
-        return list(PIP_AUDIT_UVX)
     return None
 
 
@@ -41,17 +37,11 @@ def _run_pip_audit_requirements(req_file: Path, *, cwd: Path) -> tuple[int, str]
     code, out, err = run_cmd([*cmd, *hashed], cwd=cwd, timeout=300)
     if code == 0:
         return 0, ""
-    # --disable-pip requires hashes or fully pinned files. Retry in
-    # requirements mode without pip-API-on-the-CLI-env.
-    if "--disable-pip" in (err or "") or "disable-pip" in (err or "") or code not in (0, 127):
-        code2, out2, err2 = run_cmd([*cmd, "-r", str(req_file)], cwd=cwd, timeout=300)
-        if code2 == 0:
-            return 0, ""
-        detail = (err2 or out2 or err or out).strip()
-        return (2 if code2 == 127 else 1), detail
+    # Do not retry through pip resolution: auditing must not install/build target packages.
     if code == 127:
         return 2, "[repo-safety] blocking: required scanner `pip-audit` is missing"
-    return 1, (err or out).strip()
+    return (1 if code == 1 else 2), "pip-audit did not complete successfully; provide a fully pinned auditable lockfile (raw output withheld)"
+
 
 
 def _run_osv_lockfile(lockfile: Path, *, cwd: Path, offline: bool) -> tuple[int, str]:

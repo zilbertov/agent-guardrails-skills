@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"ai-repo-safety {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("doctor", help="check Git/Python/uv/uvx/scanners and print agent install plan", parents=[common])
+    p = sub.add_parser("doctor", help="check local prerequisites and print a reviewed-tool installation plan", parents=[common])
     p.add_argument("--agent-plan", action="store_true", help="always print agent install plan")
 
     for name, help_text in (

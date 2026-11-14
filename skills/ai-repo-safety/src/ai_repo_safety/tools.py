@@ -28,7 +28,6 @@ TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("Git", "git", True, "source control and hooks", "Install Git from official docs or OS package manager."),
     ToolSpec("Python", "python", True, "runtime; Python 3.12+ required", "Install Python 3.12+ or use `uv python install 3.12`."),
     ToolSpec("uv", "uv", False, "Python package/project manager", "Install uv from Astral official docs."),
-    ToolSpec("uvx", "uvx", False, "run Python tools in isolated envs", "uvx is installed with uv; update/reinstall uv if missing."),
     ToolSpec("pre-commit", "pre-commit", False, "local commit hooks", "Install with `uv tool install pre-commit`."),
     ToolSpec("Gitleaks", "gitleaks", False, "fast secret scanning", "Install from Gitleaks official releases or package manager."),
     ToolSpec("TruffleHog", "trufflehog", False, "deep secret scanning and verification", "Install from TruffleHog official docs/releases."),
@@ -41,10 +40,10 @@ TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("GitHub CLI", "gh", False, "GitHub read guard backend", "Install GitHub CLI from official docs or package manager."),
     ToolSpec("git-filter-repo", "git-filter-repo", False, "clean leaked secrets from Git history", "Install with `uv tool install git-filter-repo` or OS package manager."),
     ToolSpec("GitLab CLI", "glab", False, "GitLab read guard backend", "Install GitLab CLI from official docs or package manager.", category="gitlab"),
-    ToolSpec("gosec", "gosec", False, "Go static security analyzer", "Install from securego/gosec official releases or `go install github.com/securego/gosec/v2/cmd/gosec@latest` after checking the current release.", category="go"),
-    ToolSpec("govulncheck", "govulncheck", False, "Go vulnerability analyzer", "Install from Go official tooling with `go install golang.org/x/vuln/cmd/govulncheck@latest` after checking Go docs.", category="go"),
-    ToolSpec("cargo-audit", "cargo-audit", False, "Rust dependency vulnerability scanner", "Install from RustSec/cargo-audit official releases or `cargo install cargo-audit`.", category="rust"),
-    ToolSpec("cargo-deny", "cargo-deny", False, "Rust dependency/license/advisory policy gate", "Install from EmbarkStudios/cargo-deny official releases or `cargo install cargo-deny`.", category="rust"),
+    ToolSpec("gosec", "gosec", False, "Go static security analyzer", "Install from securego/gosec official releases or an exact reviewed securego/gosec release after checking the current release.", category="go"),
+    ToolSpec("govulncheck", "govulncheck", False, "Go vulnerability analyzer", "Install from Go official tooling with an exact reviewed golang.org/x/vuln release after checking Go docs.", category="go"),
+    ToolSpec("cargo-audit", "cargo-audit", False, "Rust dependency vulnerability scanner", "Install from RustSec/cargo-audit official releases using an exact reviewed version.", category="rust"),
+    ToolSpec("cargo-deny", "cargo-deny", False, "Rust dependency/license/advisory policy gate", "Install from EmbarkStudios/cargo-deny official releases using an exact reviewed version.", category="rust"),
     ToolSpec("ESLint", "eslint", False, "JavaScript/TypeScript lint and security-adjacent rules", "Use the project's package manager and official ESLint docs.", category="typescript"),
     ToolSpec("npm", "npm", False, "JavaScript package audit backend", "Install Node.js/npm from official Node.js distributions.", category="typescript"),
     ToolSpec("Snyk Agent Scan", "snyk-agent-scan", False, "AI agent, MCP, and skill scanner", "Install from Snyk Agent Scan official releases/docs.", category="agent-skill", privacy_note="may send agent metadata to Snyk cloud; require explicit opt-in before running"),
@@ -52,43 +51,9 @@ TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("NVIDIA SkillSpector", "skillspector", False, "AI agent skill scanner with structured reports", "Install from NVIDIA/SkillSpector official repository.", category="agent-skill"),
 ]
 
-PYTHON_TOOL_COMMANDS = {
-    "pre-commit": "uv tool install pre-commit",
-    "detect-secrets": "uv tool install detect-secrets",  # pragma: allowlist secret
-    "bandit": "uv tool install bandit",
-    "ruff": "uv tool install ruff",
-    "pip-audit": "uv tool install pip-audit",
-    "git-filter-repo": "uv tool install git-filter-repo",
-}
-
-WINDOWS_INSTALL = {
-    "git": "winget install --id Git.Git -e",
-    "python": "winget install --id Python.Python.3.12 -e",
-    "uv": 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"',
-    "uvx": 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"',
-    "gitleaks": "winget install --id Gitleaks.Gitleaks -e",
-    "osv-scanner": "winget install --id Google.OSVScanner -e",
-    "gh": "winget install --id GitHub.cli -e",
-    "trufflehog": (
-        "Download "
-        f"https://github.com/trufflesecurity/trufflehog/releases/download/v{TRUFFLEHOG_RELEASE}/"
-        f"trufflehog_{TRUFFLEHOG_RELEASE}_windows_amd64.tar.gz "
-        "(pinned; do not use /latest)"
-    ),
-    "opengrep": "Install a pinned verified binary: https://github.com/opengrep/opengrep/releases",
-}
-
-UNIX_INSTALL = {
-    "git": "Install Git from official docs or OS package manager.",
-    "python": "Install Python 3.12+ or use `uv python install 3.12`.",
-    "uv": "Install uv from https://docs.astral.sh/uv/",
-    "uvx": "uvx is installed with uv; update/reinstall uv if missing.",
-    "gitleaks": "brew install gitleaks",
-    "osv-scanner": "brew install osv-scanner",
-    "gh": "brew install gh",
-    "trufflehog": "brew install trufflehog",
-    "opengrep": "Install a pinned verified binary: https://github.com/opengrep/opengrep/releases",
-}
+PYTHON_TOOL_COMMANDS = {name: f"Install reviewed {name} and transitive dependencies from an owner-maintained hash-locked requirements file." for name in ("pre-commit", "detect-secrets", "bandit", "ruff", "pip-audit", "git-filter-repo")}
+WINDOWS_INSTALL = {}
+UNIX_INSTALL = {}
 
 
 def install_one_liner(spec: ToolSpec) -> str:
@@ -193,11 +158,7 @@ def doctor(*, agent_plan: bool = False, json_out: bool = False, target: str | Pa
         "tools": tool_rows,
         "missing": unique_missing,
         "tag_gate": {"uv_lock": uv_lock, "osv_scanner": osv_ok, "ok": tag_gate_ok},
-        "invoke": [
-            "py -3 -m ai_repo_safety",
-            "python -m ai_repo_safety",
-            "uvx ai-repo-safety",
-        ],
+        "invoke": [[sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/repo_safety.py")]],
     }
 
     if json_out:
@@ -220,8 +181,8 @@ def doctor(*, agent_plan: bool = False, json_out: bool = False, target: str | Pa
         for item in unique_missing:
             print(f"- {item['name']}: `{item['install']}`")
         print()
-        print("Canonical invoke: `py -3 -m ai_repo_safety` / `python -m ai_repo_safety` / `uvx ai-repo-safety`.")
-        print("Re-run `python -m ai_repo_safety doctor --target .` after installation.")
+        print("Canonical invoke: use this reviewed bundle's scripts/repo_safety.py; no registry fallback.")
+        print("Install tools separately from reviewed, pinned releases, then re-run the bundled doctor.")
 
     if not py_ok or missing_required:
         return 2
@@ -230,98 +191,9 @@ def doctor(*, agent_plan: bool = False, json_out: bool = False, target: str | Pa
 
 
 def install_missing_tools(*, dry_run: bool = False, yes: bool = False) -> int:
-    """Install Python helper tools and System binaries.
-
-    Safety posture: this function never mutates the host system
-    unless the caller passes yes=True. The legacy dry_run=True
-    flag is preserved for backward compatibility with the
-    `install-missing --dry-run` CLI alias.
-    """
-    from pathlib import Path
-
-    if not yes and not dry_run:
-        print(
-            "[repo-safety] refusing to install tools without explicit --yes. "
-            "Use --dry-run to print the plan, or --yes to perform the install."
-        )
-        return 2
-
-    is_win = is_windows()
-    failures = 0
-    apply = yes and not dry_run
-
-    if not which("uv"):
-        print("[repo-safety] uv is missing; cannot install Python tools. Run doctor and install uv first.")
-        failures += 1
-    else:
-        for command, install_cmd in PYTHON_TOOL_COMMANDS.items():
-            if which(command):
-                print(f"[repo-safety] {command} already installed")
-                continue
-            args = install_cmd.split()
-            print(f"[repo-safety] {'would run' if not apply else 'running'}: {install_cmd}")
-            if apply:
-                code, out, err = run_cmd(args, timeout=600)
-                if out:
-                    print(out.rstrip())
-                if err:
-                    print(err.rstrip())
-                if code != 0:
-                    failures += 1
-                    print(f"[repo-safety] failed to install {command}")
-
-    system_tools = ["gitleaks", "trufflehog", "opengrep", "osv-scanner", "gh"]
-
-    for tool in system_tools:
-        if which(tool):
-            print(f"[repo-safety] {tool} already installed")
-            continue
-
-        print(f"[repo-safety] installing {tool}...")
-        if dry_run:
-            print(f"  would install {tool}")
-            continue
-
-        success = False
-        try:
-            if tool == "gitleaks":
-                if is_win:
-                    c, o, e = run_cmd(["winget", "install", "--id", "Gitleaks.Gitleaks", "-e", "--accept-source-agreements", "--accept-package-agreements"])
-                    success = (c == 0)
-                else:
-                    c, o, e = run_cmd(["brew", "install", "gitleaks"])
-                    success = (c == 0)
-
-            elif tool == "osv-scanner":
-                if is_win:
-                    c, o, e = run_cmd(["winget", "install", "--id", "Google.OSVScanner", "-e", "--accept-source-agreements", "--accept-package-agreements"])
-                    success = (c == 0)
-                else:
-                    c, o, e = run_cmd(["brew", "install", "osv-scanner"])
-                    success = (c == 0)
-
-            elif tool == "gh":
-                if is_win:
-                    c, o, e = run_cmd(["winget", "install", "--id", "GitHub.cli", "-e", "--accept-source-agreements", "--accept-package-agreements"])
-                    success = (c == 0)
-                else:
-                    c, o, e = run_cmd(["brew", "install", "gh"])
-                    success = (c == 0)
-
-            elif tool == "opengrep":
-                print("[repo-safety] manual prerequisite: use a pinned official Opengrep release and verify its artifact: https://github.com/opengrep/opengrep/releases")
-            elif tool == "trufflehog":
-                if is_win:
-                    print("[repo-safety] manual prerequisite: download a pinned official TruffleHog release and verify signed checksums: https://github.com/trufflesecurity/trufflehog#verifying-the-artifacts")
-                else:
-                    c, o, e = run_cmd(["brew", "install", "trufflehog"])
-                    success = (c == 0)
-
-        except Exception as ex:
-            print(f"[repo-safety] exception installing {tool}: {ex}")
-
-        if not success:
-            print(f"[repo-safety] failed to install {tool}")
-            failures += 1
-
-    return 1 if failures else 0
+    """Report prerequisites without fetching a changing package or installer."""
+    missing = [spec for spec in TOOL_SPECS if not which(spec.command)]
+    for spec in missing:
+        print(f"[repo-safety] missing {spec.command}: install a reviewed pinned version separately; verify signed checksums for native releases or use a transitive hash lock for Python tools.")
+    print("[repo-safety] prerequisite plan only; no downloads or installation performed, including with legacy --yes.")
+    return 2 if missing and not dry_run else 0

@@ -56,3 +56,23 @@ def test_commit_gate_does_not_audit_lockfile(tmp_path: Path, monkeypatch) -> Non
 
     assert run_gate(tmp_path, when="commit") == 0
     assert called == []
+
+
+def test_missing_scanner_never_resolves_uvx(tmp_path, monkeypatch):
+    (tmp_path / 'requirements.txt').write_text('example==1.0\n')
+    monkeypatch.setattr('ai_repo_safety.lockfile_audit.which', lambda n: '/fake/uvx' if n == 'uvx' else None)
+    calls=[]
+    monkeypatch.setattr('ai_repo_safety.lockfile_audit.run_cmd', lambda *a,**kw: calls.append(a) or (0,'',''))
+    code,detail=audit_lockfile(tmp_path,required=True)
+    assert code==2 and 'missing' in detail
+    assert calls==[]
+
+
+def test_audit_error_never_retries_through_pip_resolution(tmp_path, monkeypatch):
+    (tmp_path / 'requirements.txt').write_text('unpinned-example\n')
+    monkeypatch.setattr('ai_repo_safety.lockfile_audit.which', lambda n: '/fake/pip-audit' if n=='pip-audit' else None)
+    calls=[]
+    monkeypatch.setattr('ai_repo_safety.lockfile_audit.run_cmd', lambda args,**kw: calls.append(args) or (2,'SYNTHETIC_PRIVATE_VALUE','disable-pip error'))
+    code,detail=audit_lockfile(tmp_path,required=True)
+    assert code==2 and 'SYNTHETIC_PRIVATE_VALUE' not in detail
+    assert len(calls)==1 and '--disable-pip' in calls[0]

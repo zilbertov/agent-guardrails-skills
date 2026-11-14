@@ -29,3 +29,10 @@ No change downgrades a user's existing Codex full-trust configuration or turns i
 - Reviews instruction authority and secret-source → encoded-output → commit chains; includes the trusted-startup limitation.
 - Bundled read-only helper flags linked media, suspicious secret-transformation instructions and selected Python byte/base64 literals. Staged mode reads exact indexed blobs with literal path handling.
 - Four synthetic tests cover encoded canaries, benign palettes, symlink handling, staged-vs-working-tree differences and Git pathspec metacharacters.
+
+## Supply-chain follow-up
+
+- Removed lockfile-audit's implicit unversioned uvx/pip-audit fallback and retry without --disable-pip.
+- Doctor recommends only this local bundle; prerequisite planning no longer installs changing tool releases.
+- Generated Python CI requires a reviewed transitive hash lock; GitLab no longer installs upstream ai-repo-safety. Missing Opengrep setup fails instead of reporting a successful placeholder.
+- Recommended installation uses a reviewed full commit and local copies; updates require separate review.
