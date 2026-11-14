@@ -13,6 +13,17 @@ Copy the **complete selected skill directory** into your agent's supported proje
 
 Use a locally copied, reviewed full Git commit. Do not fetch `main`, `latest`, an unversioned installer or an upstream PyPI package on each invocation. Review updates separately; a checksum proves fixed bytes, not that those bytes are benign. Python 3.12+ is needed for bundled safety commands.
 
+## Reviewed snapshot installation
+
+This snapshot contains the supply-chain correction. Clone without checking out moving branch content, then select the full reviewed commit:
+
+```sh
+git clone --no-checkout https://github.com/zilbertov/agent-guardrails-skills.git agent-guardrails-skills
+git -C agent-guardrails-skills checkout --detach 060f5cba18884dbc90d44d7ddd5a684ffc08e34e
+```
+
+Copy only the selected complete `skills/ai-repo-safety` or `skills/repo-intake-guard` folder into your trusted skill store. Ordinary invocation uses this local copy; there is no auto-update. Do not put clone, pull, npx or uvx into a per-task hook. A new revision needs a new review. Exact commits prevent a later branch update from changing installed bytes; they do not prove the reviewed code or its installed external tools are harmless.
+
 ## Repo Intake Guard
 
 Use it before adopting instructions or running setup in an unfamiliar repository, and when agent instructions or their linked media change. Load the guard from a trusted skill store before the repository instructions. It reviews instruction chains, flags linked media for inspection, and checks Python integer tuples/base64 for some encoded environment-like content. `--staged` reads exact Git-index blobs.
