@@ -10,7 +10,9 @@
 - Git hooks previously assumed `.git` is a directory. Resolved Git hooks paths now work in linked worktrees and with `core.hooksPath`.
 - Distribution-specific npm tests were replaced with bundled-launcher behavior tests; upstream release checks explicitly reject this non-npm bundle. No npm release pipeline is shipped.
 
-## Workflow Herdr
+## Workflow Herdr (moved)
+
+This skill is now maintained separately at [zilbertov/workflow-herdr](https://github.com/zilbertov/workflow-herdr); the following notes describe its prior changes in this repository.
 
 - Unconditional Devin dangerous defaults became CLI-policy inheritance; per-project full trust remains explicitly supported for both Codex and Devin.
 - Project YAML or project/mappings cannot declare itself trusted or override launch argv before an owner grant. Owner-scoped grants are stored separately, keyed by the exact real project root, not inherited by sibling/child repositories.
