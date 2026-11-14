@@ -34,15 +34,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent-plan", action="store_true", help="always print agent install plan")
 
     for name, help_text in (
-        ("install-tools", "install missing Python and system tools"),
-        ("install-missing", "[deprecated alias for install-tools] Install missing Python and system tools"),
+        ("install-tools", "report missing tools; no automatic downloads"),
+        ("install-missing", "[deprecated alias] report prerequisites without installing"),
     ):
         p = sub.add_parser(name, help=help_text, parents=[common])
         p.add_argument("--dry-run", action="store_true")
         p.add_argument(
             "--yes",
             action="store_true",
-            help="required confirmation flag for any actual install",
+            help="legacy compatibility flag; does not enable downloads",
         )
 
     p = sub.add_parser("setup", help="plan and optionally apply repo safety bootstrap (plan-only by default)", parents=[common])
@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--install-tools",
         action="store_true",
-        help="in --apply mode, run the system/Python tool installer",
+        help="in --apply mode, check tool prerequisites; install reviewed tools separately",
     )
     p.add_argument(
         "--run-hooks",
