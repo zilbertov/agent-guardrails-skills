@@ -20,3 +20,10 @@
 - Preserved Herdr runtime, graph transitions, worktree separation, plan/receipt gates, finite waits and model preflight. Added an explicit work contract explaining objective, scope and acceptance evidence.
 
 No change downgrades a user's existing Codex full-trust configuration or turns it into repeated per-command approval requests. Full trust and task authorization remain distinct.
+
+## Repo Intake Guard
+
+- Added an original skill for unfamiliar repositories and changed agent instructions/media.
+- Reviews instruction authority and secret-source → encoded-output → commit chains; includes the trusted-startup limitation.
+- Bundled read-only helper flags linked media, suspicious secret-transformation instructions and selected Python byte/base64 literals. Staged mode reads exact indexed blobs with literal path handling.
+- Four synthetic tests cover encoded canaries, benign palettes, symlink handling, staged-vs-working-tree differences and Git pathspec metacharacters.
